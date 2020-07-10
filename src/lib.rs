@@ -150,6 +150,68 @@ impl<T, E, Fut, F> BackoffExt<T, E, Fut, F> for F
     }
 }
 
+#[async_trait::async_trait]
+pub trait BackoffExtSend<T, E, Fut, F> {
+    /// Returns a future that, when polled, will first ask `self` for a new future (with an output
+    /// type `Result<T, backoff::Error<_>>` to produce the expected result.
+    ///
+    /// If the underlying future is ready with an `Err` value, the nature of the error
+    /// (permanent/transient) will determine whether polling the future will employ the provided
+    /// `backoff` strategy and will result in the work being retried.
+    ///
+    /// Specifically, [`backoff::Error::Permanent`] errors will be returned immediately.
+    /// [`backoff::Error::Transient`] errors will, depending on the particular [`backoff::backoff::Backoff`],
+    /// result in a retry attempt, most likely with a delay.
+    ///
+    /// If the underlying future is ready with an [`std::result::Result::Ok`] value, it will be returned immediately.
+    async fn with_backoff_send<B>(self, backoff: &mut B) -> Result<T, Error<E>>
+        where
+            B: Backoff,
+            T: 'async_trait,
+            E: 'async_trait,
+            Fut: 'async_trait;
+
+    /// Same as [`BackoffExt::with_backoff`] but takes an extra `notify` closure that will be called every time
+    /// a new backoff is employed on transient errors. The closure takes the new delay duration as an argument.
+    async fn with_backoff_notify_send<B, N>(self, backoff: &mut B, notify: N) -> Result<T, Error<E>>
+        where
+            B: Backoff,
+            N: FnMut(&Error<E>, Duration),
+            T: 'async_trait,
+            E: 'async_trait,
+            Fut: 'async_trait;
+}
+
+#[async_trait::async_trait]
+impl<T, E, Fut, F> BackoffExtSend<T, E, Fut, F> for F
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, backoff::Error<E>>> {
+
+    async fn with_backoff_send<B>(self, backoff: &mut B) -> Result<T, Error<E>>
+        where
+            B: Backoff,
+            T: 'async_trait,
+            E: 'async_trait,
+            Fut: 'async_trait
+    {
+        let backoff_struct = BackoffFutureBuilder { backoff, f: self };
+        backoff_struct.fut(|_, _| {}).await
+    }
+
+    async fn with_backoff_notify_send<B, N>(self, backoff: &mut B, notify: N) -> Result<T, Error<E>>
+        where
+            B: Backoff,
+            N: FnMut(&Error<E>, Duration),
+            T: 'async_trait,
+            E: 'async_trait,
+            Fut: 'async_trait
+    {
+        let backoff_struct = BackoffFutureBuilder { backoff, f: self };
+        backoff_struct.fut(notify).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::BackoffExt;
